@@ -36,6 +36,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #     需要链接的 OpenCV 库
 #
 find_package(OpenCV REQUIRED)
+# 查找 nlohmann/json
+find_package(nlohmann_json CONFIG REQUIRED)
 
 
 # ---------------------------------------------------------
@@ -58,6 +60,9 @@ add_executable(
     building_hvac
 
     src/main.cpp
+    src/camera/OpenCvCameraSource.cpp
+    src/video/VideoFileSource.cpp
+    src/display/DisplayWindow.cpp
 )
 
 
@@ -77,6 +82,12 @@ target_include_directories(
 
     PRIVATE
 
+    # 我们自己项目的头文件目录
+    # 有了这个以后才能写：
+    # #include "camera/OpenCvCameraSource.hpp"
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+
+    # OpenCV 的头文件目录
     ${OpenCV_INCLUDE_DIRS}
 )
 
@@ -102,4 +113,7 @@ target_link_libraries(
     PRIVATE
 
     ${OpenCV_LIBS}
+    
+    #json 库
+    nlohmann_json::nlohmann_json
 )
