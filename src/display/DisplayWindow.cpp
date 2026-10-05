@@ -80,14 +80,32 @@ int DisplayWindow::pollKey(int delay)
 
 bool DisplayWindow::isOpen() const
 {
-    return created_ && cv::getWindowProperty(windowName_, cv::WND_PROP_VISIBLE) >= 1;
+    if(!created_)
+    {
+        return false;
+    }
+
+    try
+    {
+        return cv::getWindowProperty(windowName_, cv::WND_PROP_VISIBLE) >= 1;
+    }
+    catch(const cv::Exception&)
+    {
+        return false;
+    }
 }
 
 void DisplayWindow::close()
 {
     if(created_)
-    {
-        cv::destroyWindow(windowName_);
+    {   
+        try
+        {
+            cv::destroyAllWindows();
+        }
+        catch(const cv::Exception&)
+        {
+        }
         created_ = false;
     }
 }

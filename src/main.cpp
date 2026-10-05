@@ -15,6 +15,12 @@
 #include "camera/OpenCvCameraSource.hpp"
 #include "video/VideoFileSource.hpp"
 #include "display/DisplayWindow.hpp"
+#include "factory/FrameSourceFactory.hpp"
+
+#include "detector/HogPeopleDetector.hpp"
+#include "display/DetectionOverlay.hpp"
+#include "detector/YoloPeopleDetector.hpp"
+#include "factory/PeopleDetectorFactory.hpp"
 
 
 int main()
@@ -30,50 +36,29 @@ int main()
     // 解析json
     nlohmann::json config;
     configFile >> config;
-    std::string frameSourceType = config["frame_source"].get<std::string>();
 
-    std::unique_ptr<IFrameSource> frameSource;
-
-    if(frameSourceType == "camera")
-    {
-        // 创建OpenCV摄像头源
-        std::cout << "Creating OpenCV camera source." << std::endl;
-        int cameraId = config["camera_id"].get<int>();
-        frameSource = std::make_unique<OpencvCameraSource>(cameraId);
-    }
-    else if(frameSourceType == "video")
-    {
-        // 创建视频文件源
-        std::cout << "Creating video file source." << std::endl;
-        std::string videoPath = config["video_path"].get<std::string>();
-        frameSource = std::make_unique<VideoFileSource>(videoPath);
-    }
-    else if(frameSourceType == "image")
-    {
-
-    }
-    else
-    {
-        std::cerr << "Unsupported frame source type: " << frameSourceType << std::endl;
-        return -1;
-    }
-
+    // 创建帧源工厂
+    FrameSourceFactory frameSourceFactory;
+    // 创建帧源
+    std::unique_ptr<IFrameSource> frameSource = frameSourceFactory.create(config);
     if(!frameSource->open())
     {
         
-        std::cerr << "Failed to open " << frameSourceType << " source." << std::endl; 
+        std::cerr << "Failed to open " << frameSourceFactory.getFrameSourceType() << " source." << std::endl; 
         return -1;
     }
 
-    std::cout << frameSourceType << " opened successfully." << std::endl;
+    std::cout << frameSourceFactory.getFrameSourceType() << " opened successfully." << std::endl;
 
+    // 读取第一帧
     cv::Mat frame;
     if(!frameSource->read(frame))
     {
-        std::cerr << "Failed to read frame from " << frameSourceType << "." << std::endl;
+        std::cerr << "Failed to read frame from " << frameSourceFactory.getFrameSourceType() << "." << std::endl;
         return -1;
     }
 
+    // 创建显示窗口
     DisplayWindow displayWindow("Building HVAC Camera", 0.8);
     if(!displayWindow.open(frame))
     {
@@ -81,12 +66,48 @@ int main()
         return -1;
     }
 
+    // 创建检测器工厂
+    PeopleDetectorFactory peopleDetectorFactory;
+    
+    std::unique_ptr<IPeopleDetector> peopleDetector = 
+        peopleDetectorFactory.create(config);
+    
+    // 防止配置错误导致返回 nullptr
+    if(!peopleDetector)
+    {
+        std::cerr
+            << "Failed to create people detector."
+            << std::endl;
+
+        return -1;
+    }
+
+    std::cout
+        << peopleDetectorFactory.getDetectorType()
+        << " detector created successfully."
+        << std::endl;
+
+
+    // 创建检测器
+    DetectionOverlay overlay;
+
+    
+
     while(true)
     {
+        // 检测目标绘制方框 
+        std::vector<cv::Rect> people = peopleDetector->detect(frame);
+        overlay.drawDetections(frame, people);
+
         displayWindow.show(frame);
 
         // 按下 'q' 键退出
         if(displayWindow.pollKey(1) == 'q')
+        {
+            break;
+        }
+
+        if(displayWindow.pollKey(1) == 27) // ESC key
         {
             break;
         }
@@ -96,9 +117,10 @@ int main()
             break;
         }
 
+        // 读取下一帧
         if(!frameSource->read(frame))
         {
-            std::cerr << "Failed to read frame from " << frameSourceType << "." << std::endl;
+            std::cerr << "Failed to read frame from " << frameSourceFactory.getFrameSourceType() << "." << std::endl;
             break;
         }
     }

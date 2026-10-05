@@ -63,6 +63,11 @@ add_executable(
     src/camera/OpenCvCameraSource.cpp
     src/video/VideoFileSource.cpp
     src/display/DisplayWindow.cpp
+    src/factory/FrameSourceFactory.cpp
+    src/detector/HogPeopleDetector.cpp
+    src/display/DetectionOverlay.cpp
+    src/detector/YoloPeopleDetector.cpp
+    src/factory/PeopleDetectorFactory.cpp
 )
 
 
