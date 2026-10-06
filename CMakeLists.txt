@@ -68,6 +68,9 @@ add_executable(
     src/display/DetectionOverlay.cpp
     src/detector/YoloPeopleDetector.cpp
     src/factory/PeopleDetectorFactory.cpp
+    src/filter/PeopleCountFilter.cpp
+    src/sensor/SimulatedSensorSource.cpp
+    src/protocol/ModbusTcpClient.cpp
 )
 
 
@@ -121,4 +124,5 @@ target_link_libraries(
     
     #json 库
     nlohmann_json::nlohmann_json
+    ws2_32
 )

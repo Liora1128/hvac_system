@@ -3,5 +3,7 @@
     "camera_id": 0,
 
     "people_detector": "yolo",
-    "yolo_model": "models/yolov8n.onnx"
+    "yolo_model": "models/yolov8n.onnx",
+
+    "window_size": 5
 }

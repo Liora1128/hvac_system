@@ -3,7 +3,7 @@
 #include <opencv2/imgproc.hpp>
 #include <string>
 
-void DetectionOverlay::drawDetections(cv::Mat& frame, const std::vector<cv::Rect>& detections) const
+void DetectionOverlay::drawDetections(cv::Mat& frame, const std::vector<cv::Rect>& detections, int peopleCount) const
 {
     if(frame.empty())
     {
@@ -23,7 +23,7 @@ void DetectionOverlay::drawDetections(cv::Mat& frame, const std::vector<cv::Rect
 
     // 生成左上角的人数文字
     std::string text =
-        "People: " + std::to_string(detections.size());
+        "People: " + std::to_string(peopleCount);
 
     // 绘制人数
     cv::putText(

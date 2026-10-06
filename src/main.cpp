@@ -1,5 +1,6 @@
 #include <opencv2/highgui.hpp>
 
+#include <winsock2.h>
 #include <windows.h>
 #include <algorithm>
 
@@ -11,6 +12,8 @@
 #include <string>
 #include <iostream>
 #include <memory>
+#include <chrono>
+
 #include "ports/IFrameSource.hpp"
 #include "camera/OpenCvCameraSource.hpp"
 #include "video/VideoFileSource.hpp"
@@ -21,6 +24,10 @@
 #include "display/DetectionOverlay.hpp"
 #include "detector/YoloPeopleDetector.hpp"
 #include "factory/PeopleDetectorFactory.hpp"
+#include "filter/PeopleCountFilter.hpp"
+#include "sensor/SimulatedSensorSource.hpp"
+
+#include "protocol/ModbusTcpClient.hpp"
 
 
 int main()
@@ -43,18 +50,17 @@ int main()
     std::unique_ptr<IFrameSource> frameSource = frameSourceFactory.create(config);
     if(!frameSource->open())
     {
-        
-        std::cerr << "Failed to open " << frameSourceFactory.getFrameSourceType() << " source." << std::endl; 
+        std::cerr << "[MAIN] Failed to open " << frameSourceFactory.getFrameSourceType() << " source." << std::endl; 
         return -1;
     }
 
-    std::cout << frameSourceFactory.getFrameSourceType() << " opened successfully." << std::endl;
+    std::cout << "[MAIN] " << frameSourceFactory.getFrameSourceType() << " opened successfully." << std::endl;
 
     // 读取第一帧
     cv::Mat frame;
     if(!frameSource->read(frame))
     {
-        std::cerr << "Failed to read frame from " << frameSourceFactory.getFrameSourceType() << "." << std::endl;
+        std::cerr << "[MAIN] Failed to read frame from " << frameSourceFactory.getFrameSourceType() << "." << std::endl;
         return -1;
     }
 
@@ -62,7 +68,7 @@ int main()
     DisplayWindow displayWindow("Building HVAC Camera", 0.8);
     if(!displayWindow.open(frame))
     {
-        std::cerr << "Failed to open display window." << std::endl;
+        std::cerr << "[MAIN] Failed to open display window." << std::endl;
         return -1;
     }
 
@@ -76,13 +82,14 @@ int main()
     if(!peopleDetector)
     {
         std::cerr
-            << "Failed to create people detector."
+            << "[MAIN] Failed to create people detector."
             << std::endl;
 
         return -1;
     }
 
     std::cout
+        << "[MAIN] "
         << peopleDetectorFactory.getDetectorType()
         << " detector created successfully."
         << std::endl;
@@ -91,13 +98,86 @@ int main()
     // 创建检测器
     DetectionOverlay overlay;
 
+    std::size_t windowSize = config["window_size"].get<std::size_t>();
+    // 保存最近 5 帧的人数，用来稳定 YOLO 检测结果
+    PeopleCountFilter peopleCountFilter(windowSize);
+
+    // =========================
+    // 创建模拟温湿度数据源
+    // =========================
+    // SimulatedSensorSource sensorSource;
+    // if(!sensorSource.open())
+    // {
+    //     std::cerr << "Failed to open simulated sensor." << std::endl;
+    //     return -1;
+    // }
+
+    // // 保存最近一次温湿度数据
+    // SensorData sensorData;
+
+    // // 让程序启动后立即读取一次
+    // auto lastSensorRead =
+    //     std::chrono::steady_clock::now()
+    //     - std::chrono::seconds(1);
+
+    ModbusTcpClient plcClient;
+
+    if(!plcClient.connectToServer(
+        "127.0.0.1",
+        5020
+    ))
+    {
+        std::cerr
+            << "[MAIN] Failed to connect to PLC."
+            << std::endl;
+
+        return -1;
+    }
+
+    // 记录上一次向 PLC 写人数的时间
+    auto lastPlcWrite =
+        std::chrono::steady_clock::now()
+        - std::chrono::seconds(1);
     
 
     while(true)
     {
-        // 检测目标绘制方框 
+        //  检测目标人数，返回检测到的人的矩形框
         std::vector<cv::Rect> people = peopleDetector->detect(frame);
-        overlay.drawDetections(frame, people);
+
+        // 统当前帧人数
+        int rawCount = static_cast<int>(people.size());
+        // 滤波后的人数
+        int stableCount = peopleCountFilter.update(rawCount);
+
+        // 每隔 1 秒向 PLC 写入一次人数
+        auto now = std::chrono::steady_clock::now();
+
+        if(now - lastPlcWrite >= std::chrono::seconds(1))
+        {
+            if(plcClient.writeSingleRegister(
+                0, // 寄存器地址
+                static_cast<uint16_t>(stableCount) // 写入人数
+            ))
+            {
+                std::cout
+                    << "[MAIN] Wrote stable count: "
+                    << stableCount
+                    << std::endl;
+            }
+            else
+            {
+                std::cerr
+                    << "[MAIN] Failed to write stable count."
+                    << std::endl;
+            }
+
+            lastPlcWrite = now;
+        }
+
+        std::vector<uint16_t> values;
+
+        overlay.drawDetections(frame, people, stableCount);
 
         displayWindow.show(frame);
 
@@ -120,12 +200,13 @@ int main()
         // 读取下一帧
         if(!frameSource->read(frame))
         {
-            std::cerr << "Failed to read frame from " << frameSourceFactory.getFrameSourceType() << "." << std::endl;
+            std::cerr << "[MAIN] Failed to read frame from " << frameSourceFactory.getFrameSourceType() << "." << std::endl;
             break;
         }
     }
 
     displayWindow.close();
     frameSource->close();
+    plcClient.disconnect();
     return 0;
 }
