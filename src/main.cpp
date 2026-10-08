@@ -138,6 +138,9 @@ int main()
     auto lastPlcWrite =
         std::chrono::steady_clock::now()
         - std::chrono::seconds(1);
+    auto lastPlcRead =
+        std::chrono::steady_clock::now()
+        - std::chrono::seconds(1);
     
 
     while(true)
@@ -175,7 +178,30 @@ int main()
             lastPlcWrite = now;
         }
 
-        std::vector<uint16_t> values;
+        std::vector<uint16_t> plcStatus;
+
+        if(now - lastPlcRead >= std::chrono::seconds(1))
+        {
+            if(plcClient.readHoldingRegisters(100,2,plcStatus))
+            {
+                uint16_t hvacMode = plcStatus[0];
+                uint16_t fanLevel = plcStatus[1];
+
+                std::cout
+                    << "[MAIN] PLC Status - HVAC Mode: "
+                    << hvacMode
+                    << ", Fan Level: "
+                    << fanLevel
+                    << std::endl;
+            }
+            else
+            {
+                std::cerr
+                    << "[MAIN] Failed to read PLC status."
+                    << std::endl;
+            }
+            lastPlcRead = now;
+        }
 
         overlay.drawDetections(frame, people, stableCount);
 
