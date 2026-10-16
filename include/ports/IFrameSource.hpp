@@ -6,6 +6,8 @@
 class IFrameSource
 {
     public:
+
+        // 虚析构函数，让编译器生成默认实现
         virtual ~IFrameSource() = default;
 
         // 纯虚函数，由具体的摄像头采集模块实现

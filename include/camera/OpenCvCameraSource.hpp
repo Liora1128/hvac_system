@@ -25,3 +25,20 @@ class OpencvCameraSource : public IFrameSource
 
         cv::VideoCapture cap_; // OpenCV的视频捕获对象
 };
+
+class NetworkCameraSource : public IFrameSource
+{
+    public:
+        explicit NetworkCameraSource(const std::string& url);
+
+        bool open() override; // 打开网络摄像头
+
+        bool read(cv::Mat& frame) override; // 读取一帧图像
+
+        bool isOpened() const override; // 检查网络摄像头是否已打开
+        
+        bool close() override; // 关闭网络摄像头
+    private:
+        std::string url_;
+        cv::VideoCapture cap_;
+};

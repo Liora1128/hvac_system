@@ -1,4 +1,5 @@
 import asyncio
+import math
 
 from pymodbus import pymodbus_apply_logging_config
 from pymodbus.server import ModbusTcpServer
@@ -17,10 +18,25 @@ pymodbus_apply_logging_config("WARNING")
 # PLC 控制参数
 # ============================================================
 
-# 模拟 PLC 从现场温度传感器读取到的温度
-# 目前先固定，下一步再做动态温度模型
-TEMPERATURE = 28.0
+# 初始室温与外界温度
+INITIAL_TEMPERATURE = 28.0
+AMBIENT_TEMPERATURE = 30.0
 
+# 每增加一人，对模拟平衡温度的影响
+PEOPLE_HEAT_GAIN = 0.12
+
+# 每增加 1% 风机输出，对模拟平衡温度的降温影响
+COOLING_GAIN_PER_PERCENT = 0.075
+
+# 模拟时间：现实运行 1 秒，相当于模拟 60 秒
+SIM_STEP_SECONDS = 60.0
+
+# 室温模型的时间常数，数值越大，温度变化越慢
+THERMAL_TIME_CONSTANT_SECONDS = 900.0
+
+# 保留你原有的温度启停阈值
+COOLING_ON_TEMP = 26.0
+COOLING_OFF_TEMP = 24.5
 
 # 制冷启动温度
 #
@@ -58,13 +74,18 @@ COOLING_OFF_TEMP = 24.5
 # 创建 HR[0] ~ HR[199]
 # 初始值全部为 0
 # ============================================================
+inital_registers = [0] * 200
 
+# HR[102] 保存室温，放大 100 倍
+# 28.00℃ 对应 2800
+
+inital_registers[102] = int(INITIAL_TEMPERATURE * 100)
 plc = SimDevice(
     1,  # Device ID / Unit ID
     SimData(
         0,
         datatype=DataType.REGISTERS,
-        values=[0] * 200
+        values=inital_registers
     )
 )
 
@@ -104,188 +125,107 @@ def fan_level_text(level: int) -> str:
 
 async def plc_control_task(server: ModbusTcpServer):
 
-    # 保存上一次状态
-    # 状态没变化时不重复打印
+    # 记录上一次状态，避免重复打印
     last_state = None
 
-
-    # ----------------------------------------
-    # 制冷状态需要记忆
-    # ----------------------------------------
-    #
-    # 这就是实现“死区”的关键。
-    #
-    # False：
-    # 当前没有制冷
-    #
-    # True：
-    # 当前正在制冷
-    #
+    # 记住当前制冷状态，实现温度滞回控制
     cooling_on = False
 
+    # 模拟房间实际温度
+    temperature = INITIAL_TEMPERATURE
 
-    while True:
+    # 一阶热惯性模型的更新系数
+    alpha = 1.0 - math.exp(-SIM_STEP_SECONDS / THERMAL_TIME_CONSTANT_SECONDS)
 
-        # ====================================================
-        # 1. 读取 HR[0]：C++ 写进来的人数
-        # ====================================================
+    while(True):
+        # 1. 读取 C++ 写入的人数 HR[0]
+        valuaes = await server.async_getValues(1, 3, 0, count = 1)
+        people_count = valuaes[0]
 
-        values = await server.async_getValues(
-            1,          # Device ID
-            3,          # Holding Register
-            0,          # HR[0]
-            count=1
+        # 2. 读取 C++ 写入的风机需求 HR[103]
+        command_values = await server.async_getValues(
+            1, 3, 103, count=1
         )
+        requested_fan_percent = max(0, min(100, int(command_values[0])))
 
-        people_count = values[0]
-
-
-        # ====================================================
-        # 2. 模拟 PLC 本地温度传感器
-        # ====================================================
-
-        temperature = TEMPERATURE
-
-
-        # ====================================================
-        # 3. 根据人数决定风机档位
-        # ====================================================
-
+        # 3. 制冷启停：保留原来的温度滞回逻辑
         if people_count == 0:
-
-            fan_level = 0
-
-        elif people_count <= 3:
-
-            # 1 ~ 3 人
-            fan_level = 1
-
-        elif people_count <= 8:
-
-            # 4 ~ 8 人
-            fan_level = 2
-
-        else:
-
-            # 9 人及以上
-            fan_level = 3
-
-
-        # ====================================================
-        # 4. HVAC 温度死区控制
-        # ====================================================
-
-        # ----------------------------------------
-        # 无人
-        # ----------------------------------------
-        if people_count == 0:
-
             cooling_on = False
 
+        elif (
+            not cooling_on
+            and temperature >= COOLING_ON_TEMP
+        ):
+            cooling_on = True
 
-        # ----------------------------------------
-        # 有人
-        # ----------------------------------------
-        else:
+        elif (
+            cooling_on
+            and temperature <= COOLING_OFF_TEMP
+        ):
+            cooling_on = False
 
-            # 当前没有制冷
-            #
-            # 温度达到 26℃ 才启动制冷
-            if (
-                not cooling_on
-                and temperature >= COOLING_ON_TEMP
-            ):
-                cooling_on = True
-
-
-            # 当前正在制冷
-            #
-            # 必须降到 24.5℃ 才停止
-            elif (
-                cooling_on
-                and temperature <= COOLING_OFF_TEMP
-            ):
-                cooling_on = False
-
-
-        # True -> 1
-        # False -> 0
         hvac_mode = 1 if cooling_on else 0
 
+        # 无人或制冷未运行时，不产生有效风机输出
+        if people_count > 0 and cooling_on:
+            actual_fan_percent = requested_fan_percent
+        else:
+            actual_fan_percent = 0
+        
+        equilibrium_temperature = (
+            AMBIENT_TEMPERATURE
+            + PEOPLE_HEAT_GAIN * people_count
+            - COOLING_GAIN_PER_PERCENT * actual_fan_percent
+        ) 
 
-        # ====================================================
-        # 5. 写入 PLC 控制结果
-        # ====================================================
-
-        # HR[100] = HVAC状态
+        temperature += alpha * (
+            equilibrium_temperature - temperature
+        )
+        
         await server.async_setValues(
-            1,
-            3,
-            100,
-            [hvac_mode]
+            1, 3, 100, [hvac_mode]
         )
 
-
-        # HR[101] = 风机档位
+        # HR[101]：实际风机输出百分比
         await server.async_setValues(
-            1,
-            3,
-            101,
-            [fan_level]
+            1, 3, 101, [
+                round(actual_fan_percent)
+            ]
         )
 
+        # HR[102]：温度放大 100 倍
+        await server.async_setValues(
+            1, 3, 102, [
+                round(temperature * 100)
+            ]
+        )
 
-        # ====================================================
-        # 6. 状态变化时打印
-        # ====================================================
-
+        # 6. 状态改变时打印
         current_state = (
             people_count,
-            temperature,
+            round(temperature, 2),
             hvac_mode,
-            fan_level
+            actual_fan_percent
         )
 
-
         if current_state != last_state:
-
             print()
             print("================================")
             print("          PLC 状态变化")
             print("================================")
-
-            print(
-                f"当前人数 : "
-                f"{people_count} 人"
-            )
-
-            print(
-                f"当前温度 : "
-                f"{temperature:.1f} ℃"
-            )
-
-            print(
-                f"HVAC状态 : "
-                f"{hvac_mode_text(hvac_mode)}"
-            )
-
-            print(
-                f"风机档位 : "
-                f"{fan_level_text(fan_level)}"
-            )
-
+            print(f"当前人数   : {people_count} 人")
+            print(f"室内温度   : {temperature:.2f} ℃")
+            print(f"HVAC 状态  : {hvac_mode}")
+            print(f"风机输出   : {actual_fan_percent}%")
             print("================================")
 
             last_state = current_state
 
-
-        # ====================================================
-        # 7. PLC 扫描周期
-        # ====================================================
-        #
-        # 这里为了仿真方便，每秒执行一次控制程序。
-        #
+            # 每秒执行一次 PLC 仿真
         await asyncio.sleep(1)
+
+
+
 
 
 # ============================================================

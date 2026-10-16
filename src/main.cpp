@@ -13,6 +13,10 @@
 #include <iostream>
 #include <memory>
 #include <chrono>
+#include <cmath>
+#include <thread>
+#include <mutex>
+#include <atomic> // 原子操作
 
 #include "ports/IFrameSource.hpp"
 #include "camera/OpenCvCameraSource.hpp"
@@ -28,7 +32,11 @@
 #include "sensor/SimulatedSensorSource.hpp"
 
 #include "protocol/ModbusTcpClient.hpp"
+#include "control/PIDController.hpp"
 
+cv::Mat latestFrame; // 保存最新的帧
+std::atomic<bool> cameraRunning(true); // 标志位，表示是否有新帧
+std::mutex frameMutex; // 互斥锁，用于保护共享资源
 
 int main()
 {
@@ -134,6 +142,14 @@ int main()
         return -1;
     }
 
+    PIDController pidController(
+        20.0,   // Kp
+        0.005,  // Ki
+        120.0   // Kd
+    );
+    const double targetTemperature = 25.0;
+    const double dtSeconds = 60.0;
+
     // 记录上一次向 PLC 写人数的时间
     auto lastPlcWrite =
         std::chrono::steady_clock::now()
@@ -182,23 +198,44 @@ int main()
 
         if(now - lastPlcRead >= std::chrono::seconds(1))
         {
-            if(plcClient.readHoldingRegisters(100,2,plcStatus))
+            if(plcClient.readHoldingRegisters(100, 3, plcStatus))
             {
-                uint16_t hvacMode = plcStatus[0];
-                uint16_t fanLevel = plcStatus[1];
+                const uint16_t hvacMode = plcStatus[0];
 
-                std::cout
-                    << "[MAIN] PLC Status - HVAC Mode: "
-                    << hvacMode
-                    << ", Fan Level: "
-                    << fanLevel
-                    << std::endl;
-            }
-            else
-            {
-                std::cerr
-                    << "[MAIN] Failed to read PLC status."
-                    << std::endl;
+                const uint16_t actualFanpercent = plcStatus[1];
+
+                const double roomTemperature = static_cast<double>(plcStatus[2]/100.0);
+
+                double fanDemand = 0.0;
+
+                if(stableCount > 0 && hvacMode == 1)
+                {
+                    const PIDTerms terms = pidController.update(
+                        targetTemperature,
+                        roomTemperature,
+                        dtSeconds
+                    );
+                    // 保护控制输出在 0～100% 之间
+                    fanDemand = std::clamp(
+                        terms.output,
+                        0.0,
+                        100.0
+                    );
+
+                    std::cout
+                        << "[PID] Temp: " << roomTemperature
+                        << " C, Error: " << terms.error
+                        << ", P: " << terms.p
+                        << ", I: " << terms.i
+                        << ", D: " << terms.d
+                        << ", Demand: " << fanDemand
+                        << "%" << std::endl;
+                }
+                else{
+                    std::cerr
+                        << "[MAIN] Failed to read PLC status."
+                        << std::endl;
+                }
             }
             lastPlcRead = now;
         }

@@ -28,6 +28,15 @@ FrameSourceFactory::create(const nlohmann::json& config)
         std::string videoPath = config["video_path"].get<std::string>();
         return std::make_unique<VideoFileSource>(videoPath);
     }
+    else if (frameSourceType_ == "network_camera")
+    {
+        std::string streamUrl =
+            config["stream_url"].get<std::string>();
+
+        return std::make_unique<NetworkCameraSource>(
+            streamUrl
+        );
+    }
     else
     {
         std::cerr << "Unsupported frame source type: " << frameSourceType_ << std::endl;

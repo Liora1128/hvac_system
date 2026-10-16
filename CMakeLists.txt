@@ -71,6 +71,7 @@ add_executable(
     src/filter/PeopleCountFilter.cpp
     src/sensor/SimulatedSensorSource.cpp
     src/protocol/ModbusTcpClient.cpp
+    src/control/PIDController.cpp
 )
 
 
@@ -125,4 +126,31 @@ target_link_libraries(
     #json 库
     nlohmann_json::nlohmann_json
     ws2_32
+)
+
+
+# =========================================================
+# PID 控制器独立测试
+# =========================================================
+
+enable_testing()
+
+add_executable(
+    pid_controller_test
+
+    test/pid_controller_test.cpp
+    src/control/PIDController.cpp
+)
+
+target_include_directories(
+    pid_controller_test
+
+    PRIVATE
+
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_test(
+    NAME pid_controller_test
+    COMMAND pid_controller_test
 )
